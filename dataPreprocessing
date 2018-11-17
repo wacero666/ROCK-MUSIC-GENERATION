@@ -197,53 +197,65 @@ def midi_to_matrix(filename, length=250, wantedInstruments = ['Guitar','Bass','D
     print('Instruments found: ')
     print(instrument_names)
     
-    # ADAM YOU'RE HERE
+    # ADAM YOU'RE HERE; specifically about to try #2 here, making 3d array needed
     # So we almost finished the raw hack... few things:
-    # 1) we may not want to worry about indices... just take the first probs.
+    # DONE 1) we may not want to worry about indices... just take the first probs.
     # 2) we're currently not saving each iteration's output; we have to put
     #    that in a big outside matrix
     # 3) I'm betting the stuff will be lost timing wise... we could either 
     #    try to solve this properly, or just try to hack on a midi event at
     #    the first note so that everyone's in sync. We could be better and try 
     #    to figure out why it's cutting off the beginning, but we'll see.
+    #    UPDATE^ it looks like the matrix itself keeps that...must be in the 
+    #    rewrite?
     #
     #   Also exception catching all over the place needs to happen. We'll get there
     
     
     for d in list(range(len(wantedInstruments))):
         if wantedInstruments[d] in instrument_names:
-            # get out the relevant info?
+            # pick whichever track has the instrument and has more notes/info
             indices = [i for i, x in enumerate(instrument_names) if x == wantedInstruments[d]] # finds all indices of desired instrument
-            for i in indices:
-                notes_to_parse = mididata.parts[i].recurse();
-                cur_duration = float(check_float((str(notes_to_parse._getDuration()).split(' ')[-1])[:-1]))
-                durations = [];
-                notes = [];
-                offsets = [];
+            notes_to_parse = []
+            # indicesIndex = 0
+            for i in indices: 
+                temp_notes_to_parse = mididata.parts[i].recurse();
+                if len(temp_notes_to_parse) > len(notes_to_parse):
+                    notes_to_parse = temp_notes_to_parse
+                    # indicesIndex = i;
+            
+            # Extract the relevant information from the track
+            cur_duration = float(check_float((str(notes_to_parse._getDuration()).split(' ')[-1])[:-1]))
+            # ADAM this line ^ maay need changed to the mididata[correctInd].duration
+            durations = [];
+            notes = [];
+            offsets = [];
                 
-                for element in notes_to_parse:
-                    if isinstance(element, note.Note): # if it is single note
-                        notes.append(note_to_int(str(element.pitch)))
-                        duration = str(element.duration)[27:-1]
-                        durations.append(check_float(duration))
-                        offsets.append(element.offset)
-                    elif isinstance(element, chord.Chord): # if it is chord
-                        notes.append('.'.join(str(note_to_int(str(n)))
-                                              for n in element.pitches))
-                        duration = str(element.duration)[27:-1]
-                        durations.append(check_float(duration))
-                        offsets.append(element.offset)
-                    else:
-                        print ('No %s part in %s' %(wantedInstruments[d], filename))
+            for element in notes_to_parse:
+                if isinstance(element, note.Note): # if it is single note
+                    notes.append(note_to_int(str(element.pitch)))
+                    duration = str(element.duration)[27:-1]
+                    durations.append(check_float(duration))
+                    offsets.append(element.offset)
+                elif isinstance(element, chord.Chord): # if it is chord
+                    notes.append('.'.join(str(note_to_int(str(n)))
+                                          for n in element.pitches))
+                    duration = str(element.duration)[27:-1]
+                    durations.append(check_float(duration))
+                    offsets.append(element.offset)
+                else:
+                    print(element) # probably just rests and other metadata
+                    #print ('No %s part in %s' %(wantedInstruments[d], filename))
+                    
             current_matrix = notes_to_matrix(notes, durations, offsets)
             try:
-                freq, time = our_matrix.shape
+                freq, time = current_matrix.shape
             except AttributeError:
                 print ("'tuple' object has no attribute 'shape'")
                 return None
             
             if (time >= length):
-                current_output = (our_matrix[:,:length]) # We have to set all individual note matrix to same shape for Generative DL.
+                current_output = (current_matrix[:,:length]) # We have to set all individual note matrix to same shape for Generative DL.
             else:
                 print ('%s have not enough duration' %(filename))
             
