@@ -15,6 +15,7 @@ from pathlib import Path
 import glob
 import os
 import music21
+import math
 import numpy as np
 import scipy as sp
 import matplotlib.pyplot as plt
@@ -122,76 +123,174 @@ def check_float(duration): # this function fix the issue which comes from some n
         duration = str(float(numerator/denominator))
     return duration
 
+def get_instrument_by_id(id):
+    switcher = {
+        0: "Piano",
+        1: "N/A", # Chromatic Percussion
+        2: "Piano", # Organ
+        3: "Guitar",
+        4: "Bass",
+        5: "N/A", # Strings
+        6: "N/A", # Ensemble
+        7: "N/A", # Brass
+        8: "N/A", # Reed
+        9: "N/A", # Pipe
+        10: "Piano", # Synth Lead
+        11: "Piano", # Synth Pad
+        12: "N/A",   # Synth Effects
+        13: "N/A",   # Ethnic
+        14: "N/A",   # Percussive
+        15: "N/A",   # Sound Effects
+    }
+    return switcher[math.floor(id/8)]
+
+def extract_instrument_labels(filepath):
+    # Track labels should be stored in the midiProgram data of parsed streams, 
+    # though for some odd reason music21 misreads this a lot... instead, we can
+    # work around it by looking at program changes in the MIDI file events
+    #
+    # Outputs are trackChannels, trackInstrumentIds, and emptyTrackIndices
+
+    # parse the given MIDI file
+    mf = midi.MidiFile()  
+    mf.open(filepath)
+    mf.read() 
+    mf.close()
+
+    # Look at each track and extract relevant info
+    midiTracks = mf.tracks
+    trackChannels = []      # In the given MIDI file, what channel # the track is
+    trackInstrumentIds = [] # Ids for what instrument is on the given track
+    emptyTrackIndices = []  # Tracks that have no musical content (notes or lyrics)
+    count = 0
+    
+    for t in midiTracks:
+        if t.hasNotes():
+            trackChannels.append(t.getChannels()[1])
+            trackInstrumentIds.append(t.getProgramChanges()[0])
+        else:
+            trackChannels.append(-1)
+            trackInstrumentIds.append(-1)
+            emptyTrackIndices.append(count)
+            count += 1;
+
+    # map each to relevant instrument names
+    instrumentNames = []
+    for i in list(range(len(trackChannels))):
+        if trackChannels[i] == -1:
+            continue
+        elif trackChannels[i] == 10:
+            instrumentNames.append("Drums")
+        else:
+            instrumentNames.append(get_instrument_by_id(trackInstrumentIds[i]))
+            
+    return instrumentNames
 
 
 
-def midi_to_matrix(filename, length=250): # convert midi file to matrix for DL architecture.
+def midi_to_matrix(filename, length=250, wantedInstruments = ['Guitar','Bass','Drums']): # convert midi file to matrix for DL architecture.
     
-    midi = music21.converter.parse(filename)
-    notes_to_parse = None
+    mididata = music21.converter.parse(filename)
     
-    parts = music21.instrument.partitionByInstrument(midi)
-    
-    instrument_names = []
-    
-    try:
-        for instrument in parts: # learn names of instruments
-            name = (str(instrument).split(' ')[-1])[:-1]
-            instrument_names.append(name)
-    
-    except TypeError:
-        print ('Type is not iterable.')
-        return None
-    
+    # get instrument names    
+    instrument_names = extract_instrument_labels(filename)
     print('Instruments found: ')
     print(instrument_names)
-    # just take piano part
-    try:
-        piano_index = instrument_names.index('Bass')
-    except ValueError:
-        print ('%s have not any Bass part' %(filename))
-        return None
+    
+    # ADAM YOU'RE HERE
+    # So we almost finished the raw hack... few things:
+    # 1) we may not want to worry about indices... just take the first probs.
+    # 2) we're currently not saving each iteration's output; we have to put
+    #    that in a big outside matrix
+    # 3) I'm betting the stuff will be lost timing wise... we could either 
+    #    try to solve this properly, or just try to hack on a midi event at
+    #    the first note so that everyone's in sync. We could be better and try 
+    #    to figure out why it's cutting off the beginning, but we'll see.
+    #
+    #   Also exception catching all over the place needs to happen. We'll get there
     
     
-    notes_to_parse = parts.parts[piano_index].recurse()
-    
-    duration_piano = float(check_float((str(notes_to_parse._getDuration()).split(' ')[-1])[:-1]))
-
-    durations = []
-    notes = []
-    offsets = []
-    
-    for element in notes_to_parse:
-        if isinstance(element, note.Note): # if it is single note
-            notes.append(note_to_int(str(element.pitch)))
-            duration = str(element.duration)[27:-1]
-            durations.append(check_float(duration))
-            offsets.append(element.offset)
-
-        elif isinstance(element, chord.Chord): # if it is chord
-            notes.append('.'.join(str(note_to_int(str(n)))
-                                  for n in element.pitches))
-            duration = str(element.duration)[27:-1]
-            durations.append(check_float(duration))
-            offsets.append(element.offset)
-
-    
-    
-    our_matrix = notes_to_matrix(notes, durations, offsets)
-    
-    try:
-        freq, time = our_matrix.shape
-    except AttributeError:
-        print ("'tuple' object has no attribute 'shape'")
-        return None
+    for d in list(range(len(wantedInstruments))):
+        if wantedInstruments[d] in instrument_names:
+            # get out the relevant info?
+            indices = [i for i, x in enumerate(instrument_names) if x == wantedInstruments[d]] # finds all indices of desired instrument
+            for i in indices:
+                notes_to_parse = mididata.parts[i].recurse();
+                cur_duration = float(check_float((str(notes_to_parse._getDuration()).split(' ')[-1])[:-1]))
+                durations = [];
+                notes = [];
+                offsets = [];
+                
+                for element in notes_to_parse:
+                    if isinstance(element, note.Note): # if it is single note
+                        notes.append(note_to_int(str(element.pitch)))
+                        duration = str(element.duration)[27:-1]
+                        durations.append(check_float(duration))
+                        offsets.append(element.offset)
+                    elif isinstance(element, chord.Chord): # if it is chord
+                        notes.append('.'.join(str(note_to_int(str(n)))
+                                              for n in element.pitches))
+                        duration = str(element.duration)[27:-1]
+                        durations.append(check_float(duration))
+                        offsets.append(element.offset)
+                    else:
+                        print ('No %s part in %s' %(wantedInstruments[d], filename))
+            current_matrix = notes_to_matrix(notes, durations, offsets)
+            try:
+                freq, time = our_matrix.shape
+            except AttributeError:
+                print ("'tuple' object has no attribute 'shape'")
+                return None
             
-    if (time >= length):
-        return (our_matrix[:,:length]) # We have to set all individual note matrix to same shape for Generative DL.
-    else:
-        print ('%s have not enough duration' %(filename))
+            if (time >= length):
+                current_output = (our_matrix[:,:length]) # We have to set all individual note matrix to same shape for Generative DL.
+            else:
+                print ('%s have not enough duration' %(filename))
+            
         
-        
-        
+# just take piano part
+#    try:
+#        piano_index = instrument_names.index('Bass')
+#    except ValueError:
+#        print ('%s have not any Bass part' %(filename))
+#        return None
+    
+    
+#    notes_to_parse = parts.parts[piano_index].recurse()
+    
+#    duration_piano = float(check_float((str(notes_to_parse._getDuration()).split(' ')[-1])[:-1]))
+
+#    durations = []
+#    notes = []
+#    offsets = []
+    
+#    for element in notes_to_parse:
+#        if isinstance(element, note.Note): # if it is single note
+#            notes.append(note_to_int(str(element.pitch)))
+#            duration = str(element.duration)[27:-1]
+#            durations.append(check_float(duration))
+#            offsets.append(element.offset)
+#
+#        elif isinstance(element, chord.Chord): # if it is chord
+#            notes.append('.'.join(str(note_to_int(str(n)))
+#                                  for n in element.pitches))
+#            duration = str(element.duration)[27:-1]
+#            durations.append(check_float(duration))
+#            offsets.append(element.offset)
+    
+#    our_matrix = notes_to_matrix(notes, durations, offsets)
+    
+#    try:
+#        freq, time = our_matrix.shape
+#    except AttributeError:
+#        print ("'tuple' object has no attribute 'shape'")
+#        return None
+#            
+#    if (time >= length):
+#        return (our_matrix[:,:length]) # We have to set all individual note matrix to same shape for Generative DL.
+#    else:
+#        print ('%s have not enough duration' %(filename))
+
         
 def int_to_note(integer):
     # convert pitch value to the note which is a letter form. 
@@ -294,25 +393,24 @@ def matrix_to_midi(matrix):
 
 
 ## Test midi_to_matrix and matrix_to_midi for single file
-#from pathlib import Path
-#band_name = 'Nirvana'
-#song_name = 'Breed'
-#filename_midi = 'midiFilesFor10701/' + band_name + '/' + song_name + '.mid'
-#
-#my_file_single_midi = Path(filename_midi)
-#
-#if my_file_single_midi.is_file():
-#    result = midi_to_matrix(filename_midi, 1500)
-#    output_notes = matrix_to_midi(result)
-#    midi_stream = stream.Stream(output_notes)
-#    output_filename = song_name + 'bass.mid'
-#    midi_stream.write('midi', fp=output_filename)
-#else:
-#    print ("%s is not in directory" % filename_midi)
-#    
-#plt.imshow(result);
-#plt.show()
-#    
+band_name = 'Nirvana'
+song_name = 'Breed'
+filename_midi = 'midiFilesFor10701/' + band_name + '/' + song_name + '.mid'
+
+my_file_single_midi = Path(filename_midi)
+
+if my_file_single_midi.is_file():
+    result = midi_to_matrix(filename_midi, 1500)
+    output_notes = matrix_to_midi(result)
+    midi_stream = stream.Stream(output_notes)
+    output_filename = song_name + 'bass.mid'
+    midi_stream.write('midi', fp=output_filename)
+else:
+    print ("%s is not in directory" % filename_midi)
+    
+plt.imshow(result);
+plt.show()
+    
     
 
 
@@ -321,37 +419,37 @@ def matrix_to_midi(matrix):
 # Sources : https://chsasank.github.io/keras-tutorial.html
 #           https://stackoverflow.com/questions/28439701/how-to-save-and-load-numpy-array-data-properly
 
-database_npy = 'midis_array_bassTest2'
-my_file_database_original_npy = Path("./" + database_npy + '_original.npy')
-my_file_database_binary_npy = Path("./" + database_npy + '_binary.npy')
-
-
-if my_file_database_original_npy.is_file(): 
-    midis_array = np.load(my_file_database_original_npy)
-    
-else:
-    print (os.getcwd())
-    root_dir = './'
-    all_midi_paths = glob.glob(os.path.join(root_dir,'midiFilesForBassTest/*mid'))
-    print (all_midi_paths)
-    matrix_of_all_midis = []
-
-    # All midi have to be in same shape. 
-    for single_midi_path in all_midi_paths:
-        print (single_midi_path)
-        matrix_of_single_midi = midi_to_matrix(single_midi_path, length=1500)
-        if (matrix_of_single_midi is not None):
-            matrix_of_all_midis.append(matrix_of_single_midi)
-            print (matrix_of_single_midi.shape)
-    midis_array_original = np.asarray(matrix_of_all_midis)
-    # hack to make all binary and save both orig. and binary versions
-    midis_array_binary = midis_array_original.copy(); 
-    midis_array_binary[midis_array_binary != 0] = 1;
-    np.save(my_file_database_original_npy, midis_array_original)
-    np.save(my_file_database_binary_npy, midis_array_binary)
-    
-    # for me so I can visualize easier...
-    #sp.io.savemat('./originalThing.mat', mdict={'midis_array_original': midis_array_original})
-    #sp.io.savemat('./binaryThing.mat',mdict={'midis_array_binary': midis_array_binary})
-    
-    print('Done!')
+#database_npy = 'midis_array_bassTest'
+#my_file_database_original_npy = Path("./" + database_npy + '_original.npy')
+#my_file_database_binary_npy = Path("./" + database_npy + '_binary.npy')
+#
+#
+#if my_file_database_original_npy.is_file(): 
+#    midis_array = np.load(my_file_database_original_npy)
+#    
+#else:
+#    print (os.getcwd())
+#    root_dir = './'
+#    all_midi_paths = glob.glob(os.path.join(root_dir,'midiFilesForBassTest/*mid'))
+#    print (all_midi_paths)
+#    matrix_of_all_midis = []
+#
+#    # All midi have to be in same shape. 
+#    for single_midi_path in all_midi_paths:
+#        print (single_midi_path)
+#        matrix_of_single_midi = midi_to_matrix(single_midi_path, length=1500)
+#        if (matrix_of_single_midi is not None):
+#            matrix_of_all_midis.append(matrix_of_single_midi)
+#            print (matrix_of_single_midi.shape)
+#    midis_array_original = np.asarray(matrix_of_all_midis)
+#    # hack to make all binary and save both orig. and binary versions
+#    midis_array_binary = midis_array_original.copy(); 
+#    midis_array_binary[midis_array_binary != 0] = 1;
+#    np.save(my_file_database_original_npy, midis_array_original)
+#    np.save(my_file_database_binary_npy, midis_array_binary)
+#    
+#    # for me so I can visualize easier...
+#    sp.io.savemat('./originalThing.mat', mdict={'midis_array_original': midis_array_original})
+#    sp.io.savemat('./binaryThing.mat',mdict={'midis_array_binary': midis_array_binary})
+#    
+#    print('Done!')

@@ -41,6 +41,8 @@ for t in midiTracks:
         emptyTrackIndices.append(count)
     count += 1;
 
+instrumentNames = [];
+
 
 
 # sidenote: normal data for use with music21 can be read in using commands like
