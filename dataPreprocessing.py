@@ -284,8 +284,6 @@ def converter_func(arr,first_touch = 1.0, continuation = 0.0, lower_bound = lowe
     np.place(arr, arr >= upper_bound, 1.0)
     return arr
 
-
-
 def how_many_repetitive_func(array, from_where=0, continuation=0.0):
     new_array = array[from_where:]
     count_repetitive = 1 
@@ -296,43 +294,25 @@ def how_many_repetitive_func(array, from_where=0, continuation=0.0):
             count_repetitive += 1
     return (count_repetitive)
 
+def first_nonzero(arr, axis, invalid_val=-1):
+    mask = arr!=0
+    return np.where(mask.any(axis=axis), mask.argmax(axis=axis), invalid_val)
+    
 
-# THIS FUNCTION DOES NOT YET WORK WITH MULTIINSTRUMENT SETUP!
-def matrix_to_midi(matrix):
+
+def matrix_to_midi(matrix, instName):
     first_touch = 1.0
     continuation = 0.0
     y_axis, x_axis = matrix.shape
     output_notes = []
     offset = 0
-        
-    # Delete rows until the row which include 'first_touch'
-    how_many_in_start_zeros = 0
-    for x_axis_num in range(x_axis):
-        one_time_interval = matrix[:,x_axis_num] # values in a column
-        one_time_interval_norm = converter_func(one_time_interval)
-        if (first_touch not in one_time_interval_norm):
-            how_many_in_start_zeros += 1
-        else:
-            break
+            
+    matrix = matrix.astype(float)
     
-    how_many_in_end_zeros = 0
-    for x_axis_num in range(x_axis-1,0,-1):
-        one_time_interval = matrix[:,x_axis_num] # values in a column
-        one_time_interval_norm = converter_func(one_time_interval)
-        if (first_touch not in one_time_interval_norm):
-            how_many_in_end_zeros += 1
-        else:
-            break
-        
-    print ('How many rows for non-start note at beginning:', how_many_in_start_zeros)
-    print ('How many rows for non-start note at end:', how_many_in_end_zeros)
-
-    matrix = matrix[:,how_many_in_start_zeros:]
-    y_axis, x_axis = matrix.shape
-    print (y_axis, x_axis)
+    print (y_axis, x_axis)  # ADAM YOU'RE HERE debugging why the output fails
 
     for y_axis_num in range(y_axis):
-        one_freq_interval = matrix[y_axis_num,:] # bir columndaki değerler
+        one_freq_interval = matrix[y_axis_num,:] # get a column
         # freq_val = 0 # columdaki hangi rowa baktığımızı akılda tutmak için
         one_freq_interval_norm = converter_func(one_freq_interval)
         # print (one_freq_interval)
@@ -341,39 +321,43 @@ def matrix_to_midi(matrix):
         while (i < len(one_freq_interval)):
             how_many_repetitive = 0
             temp_i = i
-            if (one_freq_interval_norm[i].any == first_touch):
+            if (one_freq_interval_norm[i] == first_touch):
                 how_many_repetitive = how_many_repetitive_func(one_freq_interval_norm, from_where=i+1, continuation=continuation)
                 i += how_many_repetitive 
-            try:
-                print(how_many_repetitive)
-                (how_many_repetitive > 0)
-            except ValueError as ex:
-                print(how_many_repetitive)
-            
+
             if (how_many_repetitive > 0):
                 new_note = note.Note(int_to_note(y_axis_num),duration=duration.Duration(0.25*how_many_repetitive))
                 new_note.offset = 0.25*temp_i
-                new_note.storedInstrument = instrument.Bass()
+                if instName is "Bass":
+                    new_note.storedInstrument = instrument.Bass()
+                elif instName is "Guitar":
+                    new_note.storedInstrument = instrument.Guitar()
+                elif instName is "Drums":
+                    new_note.storedInstrument = instrument.ElectricOrgan() # THIS IS HACKISH!!!
+                else:
+                    new_note.storedInstrument = instrument.Piano()
                 output_notes.append(new_note)
             else:
                 i += 1
     return output_notes
 
-def first_nonzero(arr, axis, invalid_val=-1):
-    mask = arr!=0
-    return np.where(mask.any(axis=axis), mask.argmax(axis=axis), invalid_val)
-    
-    
 
 
-# ADAM WE NEED TO PUSH TO GITHUB!!!
 
 
-# START SCRIPT HERE
+
+
+
+####
+#### START SCRIPT HERE
+####
 wantedInstruments = ["Bass","Guitar","Drums"]
 database_npy = "midis_array_MultIntTestBGD_XL"
 matname = "multiInstAttBGD_XL"
 midisfolder = "midiFilesFor10701/*/*mid"
+perform_matrix_to_midi = True;
+
+
 
 
 
@@ -415,6 +399,7 @@ my_file_database_simplified_npy = Path("./" + database_npy + '_simplified.npy')
 
 if my_file_database_original_npy.is_file(): 
     midis_array = np.load(my_file_database_original_npy)
+    print("File already exists! Proceeding to MIDI instrument track decomposition")
     
 else:
     print (os.getcwd())
@@ -479,4 +464,25 @@ else:
     sio.savemat('./binary'+matname+'.mat',mdict={'midis_array_binary': midis_array_binary})
     sio.savemat('./simplified'+matname+'.mat',mdict={'midis_array_simplified': midis_array_simplified})
 
-    print('Done!')
+    print('Done with MIDI -> Matrix')
+    
+    
+if perform_matrix_to_midi:
+    if len(wantedInstruments) > 1:
+        for inst in wantedInstruments:
+            for i in range(len(midis_array_original)): # for each song:
+                thePart = matrix_to_midi(midis_array_original[i,wantedInstruments.index(inst),:,:],inst)
+                midi_stream = stream.Stream(thePart)
+                songname = all_midi_paths[i].split("/",3)[2:4]
+                output_filename = wantedInstruments[0] + '_' + songname[0] + '_' + songname[1]
+                midi_stream.write('midi', fp=output_filename)
+                print("finished " + str(i) + " of " + str(len(midis_array_original)))   
+    else:
+        for i in range(len(midis_array_original)): # for each song:
+            thePart = matrix_to_midi(midis_array_original[i,:,:],wantedInstruments[0])
+            midi_stream = stream.Stream(thePart)
+            songname = all_midi_paths[i].split("/",3)[2:4]
+            output_filename = wantedInstruments[0] + '_' + songname[0] + '_' + songname[1]
+            midi_stream.write('midi', fp=output_filename)
+            print("finished " + str(i) + " of " + str(len(midis_array_original)))
+    
